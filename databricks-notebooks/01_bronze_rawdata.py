@@ -1,3 +1,5 @@
+# CODE IS PUBLISHED ON DATABRICKS NOTEBOOKS
+
 from pyspark.sql.functions import *
 
 event_hub_namespace = "<<event_hub_namespace>>"
