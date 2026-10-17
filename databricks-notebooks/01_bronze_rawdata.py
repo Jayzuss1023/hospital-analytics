@@ -1,12 +1,17 @@
+# First stage of hospital analytics pipeline. 
+# Takes raw patient-flow events from Azure Event Hubs into the bronze Delta table
+
+
 # Take data from stream and convert from binary into JSON string then load into bronze table
 # Any data being cleaned using Kafka is converted into binary data
 # Any data used again is converted into a string then stored
-from pyspark.sql.function import *
+from pyspark.sql.functions import *
+# Create a key vault in Azure to keep the connection string secured
 
 # Azure Event Hub Configuration
 event_hub_namespace = "<<Namespace_hostname>>"
 event_hub_name="<<Eventhub_Name>>"  
-event_hub_conn_str = "<<Connection_string>>"
+event_hub_conn_str = dbtutils.secrets.get(scope='scope_name', key='secret_key_name')
 
 
 #Configuration for EventHub
@@ -19,8 +24,8 @@ kafka_options = {
     'startingOffsets': 'latest',
     'failOnDataLoss': 'false'
 }
-# Eventhub authorization. 
-# Kafka message comes with binary data since kafka stores the payload as bytes
+
+# Eventhub authorization
 raw_df = (
     spark.readStream
     .format("kafka")
@@ -28,7 +33,8 @@ raw_df = (
     .load()
 )
 
-# Turn the payload into a string.
+# Kafka message comes with binary data since kafka stores the payload as bytes
+# Spark casts the payload into a string
 json_df = raw_df.selectExpr('CAST(value AS STRING) as raw_json')
 
 #ADLS configuration 
