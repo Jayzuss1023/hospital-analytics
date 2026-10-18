@@ -3,12 +3,13 @@ from pyspark.sql.functions import *
 
 # Configuration for ADLS
 spark.conf.set(
-    'fs.azure.account.key.hospitalstorage1023.dfs.core.windows.net',
-    'dbutils.secrets.get(scope='hospitalanalyticsvaultscope', key='eventhub-connection')'
+    "fs.azure.account.key.<<Storageaccount_name>>.dfs.core.windows.net",
+    "<<Databricks_Scope_Storage_Account_access_key>>"
 )
 
-bronze_path = "abfss://bronze@hospitalstorage1023.dfs.core.windows.net/patient_flow"
-silver_path = "abfss://silver@hospitalstorage1023.dfs.core.windows.net/patient_flow"
+bronze_path = "abfss://<<container>>@<<Storageaccount_name>>.core.windows.net/<<path>>"
+silver_path = "abfss://<<container>>@<<Storageaccount_name>>.core.windows.net/<<path>>"
+
 
 # Reading from Bronze Path
 bronze_df = (
