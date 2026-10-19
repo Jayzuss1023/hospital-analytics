@@ -69,6 +69,7 @@ for col_name in expected_cols:
     clean_df.writeStream
     .format('delta')
     .outputMode('append')
+    .trigger(availableNow=True)
     .option('mergeSchema', 'true')
     .option('checkpointLocation', silver_path + '_checkpoint')
     .start(silver_path)

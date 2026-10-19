@@ -1,5 +1,5 @@
 from pyspark.sql import functions as F
-from pyspark.sql.functions import lit, col, exp, current_timestamp, to_timestamp,sha2, concat_ws, coalesce, monotonically_increasing_id
+from pyspark.sql.functions import lit, col, expr, current_timestamp, to_timestamp,sha2, concat_ws, coalesce, monotonically_increasing_id
 from delta.tables import DeltaTable
 from pyspark.sql import Window
 
@@ -41,7 +41,7 @@ incoming_patient = (
 # surrogate_key with monotonically_increasing_id(). Each row in this job gets a unique 64-bit id
 # effect_to casted as type timestamp set to NULL && set isCurrent to True every row
 # Overwrite replaces whatever is in that path already
-if not DeltaTable.isDeltaTable(spark, gold_dim_department):
+if not DeltaTable.isDeltaTable(spark, gold_dim_patient):
     incoming_patient.withColumn('surrogate_key', F.monotonically_increasing_id()) \
         .withColumn('effective_to', lit(None).cast('timestamp')) \
         .withColumn('is_current', lit(True)) \
@@ -92,10 +92,10 @@ changed_keys = [row['surrogate_key'] for row in changes_df.collect()]
 if changed_keys:
     target_patient.update(
         # Condition tells what rows to update. must meet is_current = true AND only the keys found
-        condition = exp('is_current = true AND surrogate_key IN ({})'.format(','.join(str(k) for k in changed_keys))),
+        condition = expr('is_current = true AND surrogate_key IN ({})'.format(','.join(str(k) for k in changed_keys))),
         set = {
-            'is_current': exp('false'),
-            'effective_to': exp('current_timestamp()')
+            'is_current': expr('false'),
+            'effective_to': expr('current_timestamp()')
         }
     )
 
@@ -107,7 +107,7 @@ inserts_df = spark.sql("""
 SELECT i.patient_id, i.gender, i.age, i.effective_from, i._hash
 FROM incoming_patient_temp i
 LEFT JOIN target_patient_temp t
-    ON i.patient_id = t.patient_id
+    ON i.patient_id = t.patient_id AND t.is_current = true
 WHERE t.patient_id IS NULL OR t._target_hash <> i._hash
 """).withColumn('surrogate_key', F.monotonically_increasing_id()) \
     .withColumn('effective_to', lit(None).cast('timestamp')) \
@@ -122,6 +122,7 @@ if inserts_df.count() > 0:
 
 # Prepare incoming (latest per patient feed snapshot) and overwrite dim_department
 (silver_df.select('department', 'hospital_id')
+    .distinct()
     .withColumn('surrogate_key', monotonically_increasing_id())
     .write.format('delta').mode('overwrite').save(gold_dim_department))
 
@@ -175,6 +176,9 @@ fact_final = fact_enriched.select(
 fact_final.write.format('delta').mode('overwrite').save(gold_fact)
 
 # Quick sanity checks
-print('Patient dim count:', spark.read.format('delta').load(gold_dim_patient).count())
-print('Department dim count:', spark.read.format('delta').load(gold_dim_department).count())
-print('Fact rows:', spark.read.format('delta').load(gold_fact).count())
+print("Gold Dim Patient")
+display(spark.read.format('delta').load(gold_dim_patient))
+print("Gold Dim Department")
+display(spark.read.format('delta').load(gold_dim_department))
+print('Gold Fact')
+display(spark.read.format('delta').load(gold_fact))
