@@ -3,12 +3,6 @@ from pyspark.sql.functions import lit, col, exp, current_timestamp, to_timestamp
 from delta.tables import DeltaTable
 from pyspark.sql import Window
 
-# ADLS Configuration
-spark.conf.set(
-    'fs.azure.account.key.hospitalstorage1023.dfs.core.windows.net',
-    dbutils.secrets.get(scope='hospitalanalyticsvaultscope', key='eventhub-connection')
-)
-
 # Paths - 1 silver, 3 gold paths: dimension for patient, dimension for department, fact table
 silver_path = "abfss://silver@hospitalstorage1023.dfs.core.windows.net/patient_flow"
 gold_dim_patient = "abfss://gold@hospitalstorage1023.dfs.core.windows.net/dim_patient"
@@ -76,8 +70,8 @@ target_patient_df = spark.read.format('delta').load(gold_dim_patient).withColumn
 
 # Create temp views for merge: 
 # incoming_patient = new or changed records VS target_patient = existing records
-incoming_patient.createOrReplaceTempView('incoming_patient_tmp')
-target_patient_df.createOrReplaceTempView('target_patient_tmp')
+incoming_patient.createOrReplaceTempView('incoming_patient_temp')
+target_patient_df.createOrReplaceTempView('target_patient_temp')
 
 # 2 steps using Delta Merge(sage & explicit)
 
@@ -86,8 +80,8 @@ target_patient_df.createOrReplaceTempView('target_patient_tmp')
 # patient records to close: t._target_hash <> i._hash pulls the rows that no longer match the new gender or age. 
 changes_df = spark.sql("""
 SELECT t.surrogate_key, t.patient_id
-FROM target_patient_tmp t
-INNER JOIN incoming_patient_tmp i
+FROM target_patient_temp t
+INNER JOIN incoming_patient_temp i
 ON t.patient_id = i.patient_id
 WHERE t.is_current = true and t._target_hash <> i._hash
 """)
@@ -109,16 +103,16 @@ if changed_keys:
 # 2.) Insert the newly active || changed record
 # t.patient_id IS NULL: no record located. new patient
 # t._target_hash <> i._hash: record has a change. age/gender hashes don't match
-inserts_df = sparks.sql("""
+inserts_df = spark.sql("""
 SELECT i.patient_id, i.gender, i.age, i.effective_from, i._hash
 FROM incoming_patient_temp i
 LEFT JOIN target_patient_temp t
     ON i.patient_id = t.patient_id
 WHERE t.patient_id IS NULL OR t._target_hash <> i._hash
-""").withColumn('surrogate_key', F.monitically_increasing_id()) \
+""").withColumn('surrogate_key', F.monotonically_increasing_id()) \
     .withColumn('effective_to', lit(None).cast('timestamp')) \
     .withColumn('is_current', lit(True)) \
-    .select('surrogate_key', 'patient_id', 'gender',' age', 'effective_from', 'effective_to', 'is_current')
+    .select('surrogate_key', 'patient_id', 'gender','age', 'effective_from', 'effective_to', 'is_current')
 
 # Append new rows
 if inserts_df.count() > 0:
@@ -152,6 +146,16 @@ fact_enriched = (fact_base
                 .join(dim_patient_df, on='patient_id', how="left")
                 .join(dim_dept_df, on=['department', 'hospital_id'], how='left')
                 )
+
+# Compute metrics
+# Time is computed into seconds. Dividing by 3600 converts from seconds to hours
+# Patient is admitted if discharge time is in the future
+# Stamp to show when gold job wrote it
+fact_enriched = fact_enriched.withColumn('length_of_stay_hours',
+                                         (F.unix_timestamp(col("discharge_time")) - F.unix_timestamp(col("admission_time"))) / 3600.0) \
+                            .withColumn('is_currently_admitted', F.when(col('discharge_time') > current_timestamp(), lit(True)).otherwise(False)) \
+                            .withColumn('event_ingestion_time', current_timestamp())
+
 
 # Cast alias'
 fact_final = fact_enriched.select(
