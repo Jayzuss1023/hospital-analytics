@@ -4,10 +4,10 @@ from delta.tables import DeltaTable
 from pyspark.sql import Window
 
 # Paths - 1 silver, 3 gold paths: dimension for patient, dimension for department, fact table
-silver_path = "abfss://silver@hospitalstorage1023.dfs.core.windows.net/patient_flow"
-gold_dim_patient = "abfss://gold@hospitalstorage1023.dfs.core.windows.net/dim_patient"
-gold_dim_department = "abfss://gold@hospitalstorage1023.dfs.core.windows.net/dim_department"
-gold_fact = "abfss://gold@hospitalstorage1023.dfs.core.windows.net/fact_patient_flow"
+silver_path = "abfss://<<container>>@<<Storageaccount_name>>.core.windows.net/<<path>>"
+gold_dim_patient = "abfss://<<container>>@<<Storageaccount_name>>.core.windows.net/<<path>>"
+gold_dim_department = "abfss://<<container>>@<<Storageaccount_name>>.core.windows.net/<<path>>"
+gold_fact = "abfss://<<container>>@<<Storageaccount_name>>.core.windows.net/<<path>>"
 
 # Read Silver Data
 silver_df = spark.read.format('delta').load(silver_path)
