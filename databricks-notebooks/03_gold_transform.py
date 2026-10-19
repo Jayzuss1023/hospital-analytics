@@ -24,8 +24,7 @@ silver_df = spark.read.format('delta').load(silver_path)
 w = Window.partitionBy('patient_id').orderBy(F.col('admission_time').desc())
 
 # withColumn: add a new column, 'row_num' to the modified window above. 
-# the group is sorted by admission_time desc
-# row_number(): increments starting at '1' to the extent of how many rows there are
+# row_number(): increment starting at '1' to the extent of how many rows there are
 # filter: Drop old admissions and keep only the most recent admission for one patient
 # drop: remove helper column to keep from being added the original Data Frame
 silver_df = (
@@ -43,10 +42,10 @@ incoming_patient = (
     .withColumn('effective_from', current_timestamp())
 )
 
-# Initialize DeltaTable if not exists and write into it
+# Initialize DeltaTable if not exists. First write.
 # 3 SCD columns: [timestamp, isCurrent, surrogate_key]
 # surrogate_key with monotonically_increasing_id(). Each row in this job gets a unique 64-bit id
-# effect_to casted with a Null timestamp && set isCurrent to True every row
+# effect_to casted as type timestamp set to NULL && set isCurrent to True every row
 # Overwrite replaces whatever is in that path already
 if not DeltaTable.isDeltaTable(spark, gold_dim_department):
     incoming_patient.withColumn('surrogate_key', F.monotonically_increasing_id()) \
@@ -84,7 +83,7 @@ target_patient_df.createOrReplaceTempView('target_patient_tmp')
 
 # 1. Mark old current rows as not current where changed
 
-# Stored keys to close: t._target_hash <> i._hash pulls the rows that no longer match the new gender or age. 
+# patient records to close: t._target_hash <> i._hash pulls the rows that no longer match the new gender or age. 
 changes_df = spark.sql("""
 SELECT t.surrogate_key, t.patient_id
 FROM target_patient_tmp t
@@ -118,6 +117,7 @@ LEFT JOIN target_patient_temp t
 WHERE t.patient_id IS NULL OR t._target_hash <> i._hash
 """).withColumn('surrogate_key', F.monitically_increasing_id()) \
     .withColumn('effective_to', lit(None).cast('timestamp')) \
+    .withColumn('is_current', lit(True)) \
     .select('surrogate_key', 'patient_id', 'gender',' age', 'effective_from', 'effective_to', 'is_current')
 
 # Append new rows
@@ -136,7 +136,41 @@ if inserts_df.count() > 0:
 # Read current dims (filter is_current=true)
 dim_patient_df = (spark.read.format('delta').load(gold_dim_patient)
                 .filter(col('is_current') == True)
-                .select(col('surroage_key').alias('surrogate_key_patient'), 'patient_id', 'gender', 'age'))
+                .select(col('surrogate_key').alias('surrogate_key_patient'), 'patient_id', 'gender', 'age'))
 
 dim_dept_df = (spark.read.format('delta').load(gold_dim_department)
                 .select(col('surrogate_key').alias('surrogate_key_dept'), 'department', 'hospital_id'))
+
+# Build base fact from silver events
+fact_base = (silver_df
+            .select('patient_id', 'department', 'hospital_id', 'admission_time', 'discharge_time', 'bed_id')
+            .withColumn('admission_date', F.to_date('admission_time'))
+            )
+
+# Join to get surrogate keys
+fact_enriched = (fact_base
+                .join(dim_patient_df, on='patient_id', how="left")
+                .join(dim_dept_df, on=['department', 'hospital_id'], how='left')
+                )
+
+# Cast alias'
+fact_final = fact_enriched.select(
+    F.monotonically_increasing_id().alias('fact_id'),
+    col('surrogate_key_patient').alias('patient_sk'),
+    col('surrogate_key_dept').alias('department_sk'),
+    'admission_time',
+    'discharge_time',
+    'admission_date',
+    'length_of_stay_hours',
+    'is_currently_admitted',
+    'bed_id',
+    'event_ingestion_time'
+)
+
+# Persist fact table partitioned by admission_date (helps Synapse / queries)
+fact_final.write.format('delta').mode('overwrite').save(gold_fact)
+
+# Quick sanity checks
+print('Patient dim count:', spark.read.format('delta').load(gold_dim_patient).count())
+print('Department dim count:', spark.read.format('delta').load(gold_dim_department).count())
+print('Fact rows:', spark.read.format('delta').load(gold_fact).count())
