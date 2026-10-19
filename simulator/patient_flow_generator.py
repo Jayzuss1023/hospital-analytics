@@ -19,11 +19,11 @@ load_dotenv()
 
 #Configuration for EventHub
 producer = KafkaProducer(
-    bootstrap_servers=f"{os.getenv('EVENTHUBS_NAMESPACE')}:9093",
+    bootstrap_servers=f"{os.getenv('AZURE_EVENTHUBS_NAMESPACE')}:9093",
     security_protocol='SASL_SSL',
     sasl_mechanism="PLAIN",
     sasl_plain_username="$ConnectionString",
-    sasl_plain_password=os.getenv("CONNECTION_STRING"),
+    sasl_plain_password=os.getenv("AZURE_CONNECTION_STRING"),
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
 
@@ -65,6 +65,6 @@ def generate_patient_event():
 if __name__=='__main__':
     while True:
         event = generate_patient_event()
-        producer.send(os.getenv("EVENT_HUB_NAME"), event)
+        producer.send(os.getenv("AZURE_EVENT_HUB_NAME"), event)
         print(f"Sent to Event Hub: {event}")
         time.sleep(1)
