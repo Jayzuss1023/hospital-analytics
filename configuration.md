@@ -1,368 +1,348 @@
-# Microsoft Azure to Databricks Configuration
+# Azure to Databricks Configuration
 
-This guide connects a local patient-flow simulator to Azure Event Hubs, then lands the raw stream in a bronze Delta table on Azure Data Lake Storage (ADLS) Gen2. Databricks reads secrets from Azure Key Vault. Later layers clean that data (silver) and publish analytics tables (gold).
+This guide sets up the Azure resources for the hospital analytics pipeline. A local simulator publishes patient events to Event Hubs. Databricks reads those events into a medallion lake on Azure Data Lake Storage, and Azure Data Factory runs the gold notebook when the silver layer has new files.
 
-Keep every resource in the **same resource group and region**.
+Finish the steps in order. Later resources depend on names, keys, and identities created earlier.
 
-The repo currently implements the producer and the bronze notebook only:
+## Contents
 
-- `simulator/patient_flow_generator.py` publishes events to Event Hubs.
-- `databricks-notebooks/01_bronze_rawdata.py` reads that stream into bronze.
+1. [What you are building](#what-you-are-building)
+2. [Before you begin](#before-you-begin)
+3. [Create a resource group](#create-a-resource-group)
+4. [Create Event Hubs](#create-event-hubs)
+5. [Create the storage account](#create-the-storage-account)
+6. [Create a Key Vault](#create-a-key-vault)
+7. [Grant yourself access to Key Vault](#grant-yourself-access-to-key-vault)
+8. [Store the first secrets](#store-the-first-secrets)
+9. [Create Azure Databricks](#create-azure-databricks)
+10. [Let Databricks read Key Vault](#let-databricks-read-key-vault)
+11. [Create a Databricks secret scope](#create-a-databricks-secret-scope)
+12. [Create Azure Data Factory](#create-azure-data-factory)
+13. [Configure the notebooks](#configure-the-notebooks)
+14. [Run the patient-flow simulator](#run-the-patient-flow-simulator)
+15. [Suggested run order](#suggested-run-order)
 
-Silver, gold, and Synapse are storage containers reserved for later stages.
+## What you are building
 
-## Prerequisites
+| Layer | Container | What it holds |
+| --- | --- | --- |
+| Bronze | `bronze` | Raw event JSON from Event Hubs, preserved as it arrived |
+| Silver | `silver` | Cleaned, validated records with parsed timestamps and a stable schema |
+| Gold | `gold` | Patient and department dimensions, plus a fact table for reporting |
+| Analytics | `synapse` | Reserved for downstream analytics such as Synapse. This guide does not create a Synapse workspace |
 
-- An Azure subscription, and Contributor or Owner on the resource group.
-- Azure Databricks workspace access (you can launch the workspace and create compute).
-- Python 3.12 or newer and [uv](https://docs.astral.sh/uv/) for the local simulator.
+The notebooks that implement those layers are:
 
-## 1. Create a resource group
+- [Bronze ingestion](databricks-notebooks/01_bronze_rawdata.py)
+- [Silver cleaning](databricks-notebooks/02_silver_cleandata.py)
+- [Gold transform](databricks-notebooks/03_gold_transform.py)
 
-1. Sign in to the [Azure portal](https://portal.azure.com).
-2. Search for **Resource groups** and create one.
-3. Use this resource group for Event Hubs, Databricks, the storage account, Key Vault, and the Access Connector.
+Each patient event has `patient_id`, `gender`, `age`, `department`, `admission_time`, `discharge_time`, `bed_id`, and `hospital_id`. The simulator occasionally sends an age over 100 or an admission time in the future. The silver notebook corrects those values.
 
-## 2. Create an Event Hubs namespace
+## Before you begin
+
+You need:
+
+- An Azure subscription where you can create resource groups, Event Hubs, storage, Key Vault, Databricks, and Data Factory
+- Permission to assign Azure roles on those resources
+- Python 3.12 or newer and [uv](https://docs.astral.sh/uv/) if you will run the local simulator
+- A Databricks Runtime that includes Apache Spark and Delta Lake
+
+> [!IMPORTANT]
+> Put every resource in the same resource group and region. Store connection strings, access keys, and tokens only in Key Vault or a local `.env` file. This repository ignores `.env`. Do not commit those values.
+
+Pick names before you start and reuse them in every form and notebook. These placeholders match the notebooks:
+
+| Placeholder | Used for |
+| --- | --- |
+| `<resource-group>` | Resource group that owns every resource below |
+| `<region>` | Azure region shared by every resource |
+| `<event-hub-namespace>` | Event Hubs namespace |
+| `<event-hub-name>` | Event Hub inside that namespace. This is the Kafka topic name |
+| `<storage-account>` | Storage account name. Lowercase letters and numbers only |
+| `<key-vault>` | Key Vault name |
+| `<scope-name>` | Databricks secret scope backed by that Key Vault |
+
+## Create a resource group
+
+The later steps all say to use the resource group you already created. Create it first.
+
+1. Open the [Azure portal](https://portal.azure.com).
+2. Search for **Resource groups**.
+3. Select **Create**.
+4. Choose your subscription, then enter `<resource-group>` and `<region>`.
+5. Select **Review + create**, then **Create**.
+
+## Create Event Hubs
+
+Event Hubs is the streaming source. The simulator and the bronze notebook both connect with the Kafka protocol on port `9093`, which requires the **Standard** pricing tier or higher.
 
 1. In the portal search bar, search for **Event Hubs**.
-2. Select **Create**.
-3. Choose the resource group from step 1.
-4. Set the pricing tier to **Standard** or higher. The Kafka endpoint on port `9093` is not available on the Basic tier, and both the simulator and the Spark notebook depend on it.
-5. Leave public network access enabled unless you have a private endpoint plan for both your laptop and Databricks.
-6. Create the namespace. When the deployment finishes, open **Overview** and select **Go to resource**.
+2. Select **Create** to create a namespace.
+3. Use `<resource-group>`, `<region>`, and `<event-hub-namespace>`.
+4. Set the pricing tier to **Standard** or higher.
+5. Select **Review + create**, then **Create**.
+6. When deployment finishes, select **Go to resource**.
+7. On the namespace **Overview** page, select **+ Event Hub**.
+8. Name it `<event-hub-name>` and create it.
+9. Open that Event Hub, then go to **Settings** > **Shared access policies**.
+10. Add a policy that includes **Send** and **Listen**. The simulator sends events. Databricks listens to them.
+11. Copy the policy **Primary connection string**. You will store it in Key Vault in a later step.
 
-## 3. Create an Event Hub
+The Kafka host name is `<event-hub-namespace>.servicebus.windows.net`. Use that full host anywhere a notebook or `.env` value asks for the namespace.
 
-1. On the namespace **Overview** page, select **+ Event Hub**.
-2. Name the hub. This value is `EVENT_HUB_NAME` in `.env` and `event_hub_name` in the notebook.
-3. Start with 2 or more partitions if you expect parallel consumers. One partition is enough for this simulator.
-4. Create the hub.
+## Create the storage account
 
-### Shared access policies
+The notebooks write Delta tables with `abfss://` paths, and Data Factory connects with an Azure Data Lake Storage Gen2 linked service. The account must be Data Lake Storage Gen2.
 
-The simulator sends. Databricks listens. You can use one policy with both rights, or split them.
-
-1. Open the Event Hub (or the namespace) and go to **Settings** → **Shared access policies**.
-2. Create a policy, or open the existing root policy.
-3. Enable **Send** for the local producer and **Listen** for the notebook. **Manage** includes both.
-4. Copy the **Primary connection string**.
-
-Use a namespace-level connection string when you can. A string that already contains `EntityPath=` is bound to one hub. The notebook also sets the hub name in `subscribe`, so prefer the namespace string and let `subscribe` choose the hub.
-
-Do not paste this string into the notebook or commit it. Store it in Key Vault in step 7.
-
-## 4. Create Azure Databricks
-
-1. Search for **Azure Databricks**.
-2. Create the workspace in the same resource group.
-3. After deployment, open the resource and select **Launch Workspace**.
-4. In the workspace, open **Compute**, create a cluster, and start it when you are ready to run the classic-cluster notebook.
-
-Serverless compute does not use this cluster. If you use serverless, skip starting a classic cluster and follow [Serverless compute](#serverless-compute) before running the notebook.
-
-## 5. Create a storage account
-
-1. Search for **Storage accounts** and create one in the same resource group.
-2. On the **Advanced** tab, enable **Hierarchical namespace**. `abfss://` paths require ADLS Gen2. This setting is chosen at creation time.
-3. After deployment, open **Overview** → **Deployment details** and select the new storage account.
-
-### Containers
-
-The medallion layout uses three layers. This project also reserves a fourth container for Synapse.
+1. Search for **Storage accounts**.
+2. Select **Create** and use `<resource-group>` and `<region>`.
+3. Name the account `<storage-account>`.
+4. On the **Advanced** tab, enable **Hierarchical namespace**. This setting cannot be changed after the account is created.
+5. Select **Review + create**, then **Create**.
+6. Open the new account from **Overview** > **Go to resource**, or from the deployment details.
+7. On the left, go to **Data storage** > **Containers**.
+8. Select **+ Container** and create these four containers:
 
 | Container | Purpose |
 | --- | --- |
-| `bronze` | Raw events, preserved as landed |
-| `silver` | Cleaned, validated, and de-duplicated data |
-| `gold` | Refined tables for analytics and reporting |
-| `synapse` | Staging area for a later Synapse workspace |
+| `bronze` | Raw streaming landing zone |
+| `silver` | Cleaned Delta data. Data Factory watches this container |
+| `gold` | Dimension and fact tables |
+| `synapse` | Extra container for a later analytics tool |
 
-1. On the left, open **Data storage** → **Containers**.
-2. Select **+ Container** and create `bronze`, `silver`, `gold`, and `synapse`.
-3. Use lowercase names. Container names are case-sensitive in the `abfss` path.
+9. Go to **Security + networking** > **Access keys**.
+10. Copy **key1**. You will store it in Key Vault. Leave the key in place. The silver notebook uses it to authenticate to the lake.
 
-### Account key
-
-1. Open **Security + networking** → **Access keys**.
-2. Copy **key1**. You will store it as a Key Vault secret. The classic notebook reads it from the secret scope.
-
-If the storage account firewall is restricted later, allow the Databricks Access Connector (serverless) or trusted Azure services (classic) before expecting `abfss` reads and writes to succeed.
-
-## 6. Create a Key Vault
-
-1. Search for **Key Vault** and create one in the same resource group.
-2. On the access configuration step, choose **Azure role-based access control**. The IAM steps below do nothing useful if the vault is left on vault access policies.
-3. After deployment, select **Go to resource**.
-
-## 7. Store secrets
-
-Suggested secret names, matching the notebook samples below:
-
-| Secret name | Value |
-| --- | --- |
-| `eventhub-connection` | Event Hubs primary connection string from step 3 |
-| `storage-connection` | Storage account key1 from step 5 |
-
-For each secret:
-
-1. On the Key Vault, expand **Objects** → **Secrets**.
-2. Select **Generate/Import**.
-3. Enter the name and paste the value into **Secret value**.
-4. Create the secret.
-
-Role assignment can take a few minutes to propagate. If **Generate/Import** is disabled, finish step 8 first.
-
-## 8. Grant yourself Key Vault Administrator
-
-1. On the Key Vault, open **Access control (IAM)**.
-2. Select **Add** → **Add role assignment**.
-3. Choose **Key Vault Administrator**.
-4. Open the **Members** tab, select **Select members**, and choose your user.
-5. Select **Review + assign**.
-
-This role lets you create and read secrets in the portal. It is separate from the Databricks role in the next step.
-
-## 9. Grant Databricks access to Key Vault
-
-1. Still under **Access control (IAM)**, select **Add** → **Add role assignment**.
-2. Choose **Key Vault Secrets User**.
-3. Open the **Members** tab, select **Select members**, and search for **AzureDatabricks**.
-4. Select **Review + assign**.
-
-**Key Vault Secrets User** allows Databricks to read secret values. It does not allow Databricks to change them.
-
-## 10. Create a Databricks secret scope
-
-A Key Vault-backed scope maps a scope name to this vault. The notebook then calls `dbutils.secrets.get`. The method name is `dbutils`, not `dbtutils`.
-
-1. Copy the workspace URL and delete everything after `.net`.
-2. Append `#secrets/createScope`.
+Delta paths in the notebooks look like this:
 
 ```text
-https://<databricks-instance>.azuredatabricks.net#secrets/createScope
+abfss://<container>@<storage-account>.dfs.core.windows.net/<path>
 ```
 
-Example: `https://adb-1234567890123456.7.azuredatabricks.net#secrets/createScope`
+Use the `dfs.core.windows.net` host. That is the Data Lake endpoint.
 
-3. On the Key Vault, open **Settings** → **Properties**.
-4. Fill in the scope page:
+## Create a Key Vault
 
-| Scope field | Key Vault property |
+1. Search for **Key vaults**.
+2. Select **Create** and use `<resource-group>` and `<region>`.
+3. Name it `<key-vault>`.
+4. On the access configuration step, set the permission model to **Azure role-based access control**. The steps below assign roles from **Access control (IAM)**.
+5. Select **Review + create**, then **Create**.
+6. When deployment finishes, select **Go to resource**.
+
+## Grant yourself access to Key Vault
+
+Assign this role before you create secrets. With role-based access control, secret creation fails until the assignment exists. Role changes can take a minute to apply.
+
+1. On the Key Vault, select **Access control (IAM)**.
+2. Select **Add** > **Add role assignment**.
+3. Search for and select **Key Vault Administrator**.
+4. Open the **Members** tab.
+5. Select **Select members**, choose your own user account, then confirm.
+6. Select **Review + assign**.
+
+## Store the first secrets
+
+On the Key Vault, expand **Objects** > **Secrets** > **Generate/Import**. Create these two secrets now. The Databricks token is added after the workspace exists. The names below are suggestions. Use the same names later in `dbutils.secrets.get`.
+
+| Suggested secret name | Where to copy the value |
 | --- | --- |
-| Scope Name | A name you choose, such as `hospitalanalyticsvaultscope` |
-| DNS Name | Vault URI |
-| Resource ID | Resource ID |
+| `event-hub-connection-string` | Event Hub shared access policy, **Primary connection string** |
+| `storage-account-key` | Storage account **Access keys**, **key1** |
 
-5. Save the scope name. It is the `scope` argument in the notebook.
+For each secret, paste the value into **Secret value**, then select **Create**.
 
-Manage Principal **Creator** limits who can use the scope. Choose **All Users** in the workspace if other people run the notebook.
+## Create Azure Databricks
 
-## Placeholder reference
+1. Search for **Azure Databricks**.
+2. Select **Create** and use `<resource-group>` and `<region>`.
+3. Complete the workspace form, then create it.
+4. Open the resource and select **Launch Workspace**.
+5. In the workspace, select **Compute** on the left.
+6. Create a cluster with a Databricks Runtime that includes Delta Lake.
+7. Start the cluster before you run a notebook or a Data Factory notebook activity.
 
-Replace every `<<...>>` token before running a cell. Do not commit real connection strings or account keys.
-
-| Placeholder | Source |
-| --- | --- |
-| `<<databricks_scope>>` | Scope name from step 10 |
-| `<<eventhub_connection_name>>` | Key Vault secret name for the Event Hubs connection string |
-| `<<storage_connection_name>>` | Key Vault secret name for the storage account key |
-| `<<event_hub_namespace>>` | Host name only, such as `mynamespace.servicebus.windows.net` |
-| `<<event_hub_name>>` | Event Hub name from step 3 |
-| `<<storage_account_name>>` | Storage account name from step 5 |
-| `<<container>>` | `bronze` for this notebook |
-| `<<path>>` | Folder inside the container, such as `patient_flow` |
-
-`abfss` paths use the DFS endpoint:
+While you are in the workspace, import the three notebooks under `databricks-notebooks/` or recreate them there. Data Factory will call the gold notebook by its workspace path, so note that path. It is usually similar to:
 
 ```text
-abfss://<<container>>@<<storage_account_name>>.dfs.core.windows.net/<<path>>
+/Users/<your-email>/<gold-notebook-name>
 ```
 
-The host is `dfs.core.windows.net`. A path that stops at `.core.windows.net` does not resolve for ADLS Gen2.
+## Let Databricks read Key Vault
 
-## Classic cluster notebook
+1. Return to the Key Vault in the Azure portal.
+2. Select **Access control (IAM)** > **Add** > **Add role assignment**.
+3. Choose the **Key Vault Secrets User** role.
+4. On the **Members** tab, select **Select members**.
+5. Search for and select **AzureDatabricks**.
+6. Select **Review + assign**.
 
-Use this pattern when the notebook runs on the cluster from step 4. The cluster must be running.
+## Create a Databricks secret scope
 
-`startingOffsets` of `latest` reads only events that arrive after the stream starts. Start the notebook, then start the simulator, or switch to `earliest` when you need events already sitting in the hub.
+The bronze notebook reads the Event Hubs connection string with `dbutils.secrets.get`. A Key Vault-backed scope is what makes that call work.
 
-The Kafka client on Databricks is shaded, so the JAAS login module must be `kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule`.
+1. In the browser address bar for your Databricks workspace, delete everything after `.net`, then add `#secrets/createScope`.
 
-Spark writes a checkpoint so a restarted query continues from the last committed batch. Point that checkpoint at ADLS. A `dbfs:/mnt/...` path works only after you create a mount, and these steps never create one.
+   ```text
+   https://<databricks-instance>#secrets/createScope
+   ```
+
+2. On the scope page, enter `<scope-name>` and keep it. The notebooks need this exact name.
+3. On the Key Vault, go to **Settings** > **Properties** and copy the values into the scope form:
+
+   | Key Vault property | Databricks scope field |
+   | --- | --- |
+   | Vault URI | DNS Name |
+   | Resource ID | Resource ID |
+
+4. Create the scope.
+
+Secret names inside the scope are the Key Vault secret names from the table above, such as `event-hub-connection-string`.
+
+## Create Azure Data Factory
+
+Data Factory watches the silver folder. When that folder contains at least five child items, the pipeline runs the gold notebook.
+
+Create the factory before you assign its role. The managed identity does not exist until the factory does.
+
+### Create a Databricks access token
+
+1. In the Databricks workspace, open your profile menu, then **Settings** > **Developer** > **Access tokens**.
+2. Select **Manage**, then **Generate new token**.
+3. Copy the token immediately. Databricks shows it only once.
+
+### Create the factory
+
+1. In the Azure portal, search for **Data factories**.
+2. Select **Create**, choose `<resource-group>`, and finish the form.
+3. Open the factory. Its managed identity is now available for role assignment.
+
+### Store the token and grant the factory access
+
+1. In Key Vault, create another secret:
+
+   | Secret name | Value |
+   | --- | --- |
+   | `databricks-access-token` | Token generated above |
+
+2. On the same Key Vault, select **Access control (IAM)** > **Add** > **Add role assignment**.
+3. Choose **Key Vault Secrets User**.
+4. On the **Members** tab, choose **Managed identity**, then **Select members**.
+5. Select your Data Factory, then **Review + assign**.
+
+### Create linked services
+
+1. On the Data Factory **Overview** page, select **Launch Studio**.
+2. On the left, select **Manage** > **Linked services** > **Create**.
+3. Create the Key Vault linked service and point it at `<key-vault>`.
+4. Select **Publish all**. Linked services are not available to the other connections until you publish.
+
+> [!WARNING]
+> Publish after each linked service, dataset, pipeline, and trigger. Studio keeps those objects as drafts until you select **Publish all**.
+
+5. Create the second linked service. Select **New**, switch from **Data store** to **Compute**, and choose **Azure Databricks**.
+6. Select your workspace. For **Authentication type**, choose **Azure Key Vault**, then select the Key Vault linked service and the `databricks-access-token` secret.
+7. Create the third linked service. Select **New**, stay on **Data store**, and choose **Azure Data Lake Storage Gen2**. Point it at `<storage-account>`.
+8. Select **Publish all** again.
+
+### Create the silver dataset
+
+1. Select **Author**.
+2. Next to the factory tab, select **+** > **Dataset** > **Azure Data Lake Storage Gen2** > **Parquet**.
+3. Select the storage linked service.
+4. Set the path to the silver folder. **Get Metadata** lists child items from a folder path.
+
+### Create the pipeline
+
+1. Select **+** > **Pipeline**.
+2. Search for **Get Metadata**, then drag it onto the canvas.
+3. On **General**, name the activity. The name you type here is the name used in the expression below. This guide uses `GetSilverMetadata`.
+4. On **Settings**, set **Dataset** to the Parquet dataset and **Field list** to **Child items**.
+5. Search for **If Condition**, drag it onto the canvas, and connect **Get Metadata** to it.
+6. Select the If Condition. On **General**, name it. On **Activities**, set **Expression** to:
+
+   ```text
+   @greaterOrEquals(length(activity('GetSilverMetadata').output.childItems), 5)
+   ```
+
+   Replace `GetSilverMetadata` if you chose another activity name. The pipeline runs the gold notebook when silver has at least five child items.
+
+7. With the If Condition selected, open the **True** branch and add a **Notebook** activity.
+8. On **General**, name the activity.
+9. On **Azure Databricks**, select the Databricks linked service.
+10. On **Settings**, set the notebook path to the gold notebook in your workspace, for example `/Users/<your-email>/<gold-notebook-name>`.
+11. On the pipeline canvas, select **Add trigger** > **New/Edit**.
+12. Name the trigger and set a schedule so the pipeline keeps checking the If Condition.
+13. Select **Publish all**.
+
+## Configure the notebooks
+
+Replace every `<<...>>` placeholder before running a notebook. Read secrets from `<scope-name>` instead of pasting them into notebook cells.
+
+The bronze notebook needs:
+
+- `event_hub_namespace` set to `<event-hub-namespace>.servicebus.windows.net`
+- `event_hub_name` set to `<event-hub-name>`
+- The connection string from `dbutils.secrets.get(scope="<scope-name>", key="event-hub-connection-string")`
+- A bronze Delta path and a separate checkpoint path, both under the `bronze` container
+
+The silver notebook should take the storage key from the scope:
 
 ```python
-from pyspark.sql.functions import *
-
-# Azure Event Hub configuration
-event_hub_namespace = "<<event_hub_namespace>>"
-event_hub_name = "<<event_hub_name>>"
-event_hub_conn_str = dbutils.secrets.get(
-    scope="<<databricks_scope>>",
-    key="<<eventhub_connection_name>>",
-)
-
-kafka_options = {
-    "kafka.bootstrap.servers": f"{event_hub_namespace}:9093",
-    "subscribe": event_hub_name,
-    "kafka.security.protocol": "SASL_SSL",
-    "kafka.sasl.mechanism": "PLAIN",
-    "kafka.sasl.jaas.config": (
-        "kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule required "
-        f'username="$ConnectionString" password="{event_hub_conn_str}";'
-    ),
-    "startingOffsets": "latest",
-    "failOnDataLoss": "false",
-}
-
-# Read from Event Hubs through the Kafka API
-raw_df = (
-    spark.readStream
-    .format("kafka")
-    .options(**kafka_options)
-    .load()
-)
-
-# Kafka stores the payload as bytes. Cast it back to a JSON string.
-json_df = raw_df.selectExpr("CAST(value AS STRING) as raw_json")
-
-# ADLS configuration (classic cluster, account key from Key Vault)
 spark.conf.set(
-    "fs.azure.account.key.<<storage_account_name>>.dfs.core.windows.net",
-    dbutils.secrets.get(
-        scope="<<databricks_scope>>",
-        key="<<storage_connection_name>>",
-    ),
-)
-
-bronze_path = "abfss://<<container>>@<<storage_account_name>>.dfs.core.windows.net/<<path>>"
-checkpoint_path = "abfss://<<container>>@<<storage_account_name>>.dfs.core.windows.net/_checkpoints/<<path>>"
-
-# Append each micro-batch. The checkpoint is a different folder from the table path.
-(
-    json_df
-    .writeStream
-    .format("delta")
-    .outputMode("append")
-    .option("checkpointLocation", checkpoint_path)
-    .start(bronze_path)
+    "fs.azure.account.key.<storage-account>.dfs.core.windows.net",
+    dbutils.secrets.get(scope="<scope-name>", key="storage-account-key"),
 )
 ```
 
-## Serverless compute
+Point its bronze path at the bronze Delta location and its silver path at the `silver` container.
 
-Serverless Spark does not accept the account-key setting above. ADLS access goes through an Azure Access Connector and a managed identity.
+The gold notebook reads silver and writes three paths under `gold`:
 
-### In the Azure portal
+| Path | Table |
+| --- | --- |
+| Patient dimension | Latest patient attributes, with history when gender or age changes |
+| Department dimension | Distinct department and hospital pairs |
+| Fact | One row per latest admission, including length of stay and whether the patient is still admitted |
 
-1. Sign in as a Contributor or Owner on the resource group.
-2. Select **Create a resource**.
-3. Search for **Access Connector for Azure Databricks** and select **Create**.
-4. On **Basics**, select the same resource group and region, then name the connector.
-5. Select **Next**. Add tags if you want them, then select **Next**.
-6. On **Managed Identity**, set the system-assigned identity **Status** to **On**.
-7. Select **Review + create**, then **Create**.
-8. Open the new connector's **Overview** page and copy the **Resource ID**.
+## Run the patient-flow simulator
 
-### Grant the connector access to storage
-
-1. Open the storage account from step 5.
-2. Go to **Access control (IAM)** → **Add** → **Add role assignment**.
-3. Choose **Storage Blob Data Contributor**.
-4. On **Members**, select the Access Connector's managed identity (the connector resource name).
-5. Select **Review + assign**.
-
-### In Databricks
-
-1. Open **Catalog** → **External Data** → **Credentials**.
-2. Create a storage credential of type **Azure Managed Identity** and paste the Access Connector resource ID.
-3. Create or update an external location for `abfss://bronze@<<storage_account_name>>.dfs.core.windows.net/` that uses this credential.
-
-Wait a few minutes after the role assignment before the first serverless write.
-
-Serverless queries should checkpoint on `abfss` as well. `trigger(availableNow=True)` processes the data available now and then stops, which fits a serverless notebook session that is not meant to stay up. Omit that trigger on a classic cluster when you want a continuous stream.
-
-Keep using `dbutils.secrets.get` for the Event Hubs connection string. Serverless changes how ADLS is authorized. It does not require the connection string to be hardcoded.
-
-```python
-from pyspark.sql.functions import *
-
-event_hub_namespace = "<<event_hub_namespace>>"
-event_hub_name = "<<event_hub_name>>"
-event_hub_conn_str = dbutils.secrets.get(
-    scope="<<databricks_scope>>",
-    key="<<eventhub_connection_name>>",
-)
-
-kafka_options = {
-    "kafka.bootstrap.servers": f"{event_hub_namespace}:9093",
-    "subscribe": event_hub_name,
-    "kafka.security.protocol": "SASL_SSL",
-    "kafka.sasl.mechanism": "PLAIN",
-    "kafka.sasl.jaas.config": (
-        "kafkashaded.org.apache.kafka.common.security.plain.PlainLoginModule required "
-        f'username="$ConnectionString" password="{event_hub_conn_str}";'
-    ),
-    "startingOffsets": "latest",
-    "failOnDataLoss": "false",
-}
-
-raw_df = (
-    spark.readStream
-    .format("kafka")
-    .options(**kafka_options)
-    .load()
-)
-
-json_df = raw_df.selectExpr("CAST(value AS STRING) as raw_json")
-
-bronze_path = "abfss://<<container>>@<<storage_account_name>>.dfs.core.windows.net/<<path>>"
-checkpoint_path = "abfss://<<container>>@<<storage_account_name>>.dfs.core.windows.net/_checkpoints/<<path>>"
-
-(
-    json_df
-    .writeStream
-    .format("delta")
-    .outputMode("append")
-    .trigger(availableNow=True)
-    .option("checkpointLocation", checkpoint_path)
-    .start(bronze_path)
-)
-```
-
-## Local simulator
-
-`simulator/patient_flow_generator.py` reads credentials from a `.env` file in the project root. That file is gitignored. Never commit it.
-
-```dotenv
-EVENTHUBS_NAMESPACE=<<event_hub_namespace>>
-EVENT_HUB_NAME=<<event_hub_name>>
-CONNECTION_STRING=<<event_hubs_primary_connection_string>>
-```
-
-`EVENTHUBS_NAMESPACE` is the host name only (`your-namespace.servicebus.windows.net`), with no `https://` and no port. The producer appends `:9093`.
-
-From the repository root:
+The simulator lives at [simulator/patient_flow_generator.py](simulator/patient_flow_generator.py). From the repository root, install the project and create a `.env` file with the Event Hubs values:
 
 ```bash
 uv sync
+```
+
+```text
+AZURE_EVENTHUBS_NAMESPACE=<event-hub-namespace>.servicebus.windows.net
+AZURE_EVENT_HUB_NAME=<event-hub-name>
+AZURE_CONNECTION_STRING=<primary-connection-string>
+```
+
+Then start the producer:
+
+```bash
 uv run python simulator/patient_flow_generator.py
 ```
 
-The producer sends one event per second. Each event includes `patient_id`, `gender`, `age`, `department`, `admission_time`, `discharge_time`, `bed_id`, and `hospital_id`. About 5% of events are intentionally dirty (an admission time in the future, or an age above 100) so later silver cleaning has something to catch.
+The script sends one patient event each second. Leave it running while the bronze stream is active.
 
-With `startingOffsets` set to `latest`, events sent before the Databricks stream starts are skipped. Start the notebook stream first, then run the simulator.
+## Suggested run order
 
-## Notes that are easy to miss
+- [ ] Resource group, Event Hubs, storage account, and Key Vault exist in one region.
+- [ ] Your user is **Key Vault Administrator**, and the three secrets exist.
+- [ ] The Databricks cluster is running, and `<scope-name>` can read Key Vault.
+- [ ] The bronze notebook is written with placeholders replaced, then the simulator is sending events.
+- [ ] The silver notebook has cleaned those events into the silver folder.
+- [ ] Data Factory linked services, the silver dataset, the pipeline, and the schedule trigger are published.
+- [ ] After silver has at least five child items, the trigger runs the gold notebook.
+- [ ] The gold notebook shows the patient dimension, department dimension, and fact table.
 
-- **Resource group first.** Databricks, storage, and Key Vault all say "use the created resource group," so create that group before those resources.
-- **Event Hubs Standard or higher.** Basic namespaces have no Kafka endpoint, so the producer and the notebook cannot connect.
-- **Four containers, three medallion layers.** `bronze`, `silver`, and `gold` are the medallion layout. `synapse` is extra and unused by the current notebook.
-- **Hierarchical namespace.** Turn it on when the storage account is created, or `abfss` will not work.
-- **Key Vault must use Azure RBAC.** **Key Vault Administrator** is for you. **Key Vault Secrets User** is for the **AzureDatabricks** enterprise application. A new RBAC assignment can take a few minutes.
-- **Secret scope URL.** Only the host through `.net` stays. The fragment is `#secrets/createScope`.
-- **`dbutils.secrets.get`.** Do not print secret values. Databricks redacts them, and the notebook should read both the Event Hubs string and, on a classic cluster, the storage key from the scope.
-- **Classic versus serverless storage auth.** Classic uses `spark.conf.set` with the account key. Serverless uses the Access Connector, a storage credential, and an external location. Do not mix the account-key config into a serverless notebook.
-- **Checkpoints.** Keep `checkpointLocation` on a different path from the Delta table. Use `abfss://.../_checkpoints/...` unless you have already mounted DBFS. The checked-in notebook still points the checkpoint at `dbfs:/mnt/bronze/_checkpoints/patient_flow`, which needs a mount these steps do not create.
-- **`latest` drops history.** Events produced before the query starts are ignored until you change `startingOffsets` to `earliest` or restart with a new checkpoint.
-- **Permissions on the connection string.** The simulator needs **Send**. The notebook needs **Listen**.
+## Further reading
+
+- [Azure Event Hubs for Apache Kafka](https://learn.microsoft.com/en-us/azure/event-hubs/azure-event-hubs-kafka-overview)
+- [Create a storage account with hierarchical namespace](https://learn.microsoft.com/en-us/azure/storage/blobs/create-data-lake-storage-account)
+- [Key Vault role-based access control](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide)
+- [Create an Azure Key Vault-backed Databricks secret scope](https://learn.microsoft.com/en-us/azure/databricks/security/secrets/secret-scopes)
+- [Data Factory linked services](https://learn.microsoft.com/en-us/azure/data-factory/concepts-linked-services)
