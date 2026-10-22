@@ -1,6 +1,8 @@
 # CODE IS PUBLISHED ON DATABRICKS NOTEBOOKS
 
 from pyspark.sql.functions import *
+import builtins
+
 
 event_hub_namespace = "<<event_hub_namespace>>"
 event_hub_name = "<<event_hub_name>>"
@@ -32,14 +34,19 @@ raw_df = (
 json_df = raw_df.selectExpr("CAST(value AS STRING) as raw_json")
 
 bronze_path = "abfss://<<container>>@<<storage_account_name>>.dfs.core.windows.net/<<path>>"
-checkpoint_path = "abfss://<<container>>@<<storage_account_name>>.dfs.core.windows.net/_checkpoints/<<path>>"
 
-(
+# Structured Streaming job that writes the Kafka JSON into a Delta table in the bronze layer, then waits until that job finishes.
+query = (
     json_df
     .writeStream
     .format("delta")
     .outputMode("append")
     .trigger(availableNow=True)
-    .option("checkpointLocation", checkpoint_path)
+    .option("checkpointLocation", "abfss://bronze@hospitalstorage1023.dfs.core.windows.net/_checkpoints/patient_flow")
     .start(bronze_path)
 )
+query.awaitTermination()
+
+new_rows = builtins.sum((p['numInputRows'] or 0) for p in query.recentProgress)
+dbutils.job.taskValues.set(key='new_rows', value=new_rows)
+print(f"New bronze rows: {new_rows}")

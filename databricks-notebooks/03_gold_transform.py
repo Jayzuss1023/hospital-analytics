@@ -103,13 +103,17 @@ if changed_keys:
 # 2.) Insert the newly active || changed record
 # t.patient_id IS NULL: no record located. new patient
 # t._target_hash <> i._hash: record has a change. age/gender hashes don't match
+# Read current max surrogate key to avoid key collisions across runs
+_max_sk = spark.read.format('delta').load(gold_dim_patient).agg(F.max('surrogate_key')).collect()[0][0]
+_max_sk = _max_sk if _max_sk is not None else -1
+
 inserts_df = spark.sql("""
 SELECT i.patient_id, i.gender, i.age, i.effective_from, i._hash
 FROM incoming_patient_temp i
 LEFT JOIN target_patient_temp t
     ON i.patient_id = t.patient_id AND t.is_current = true
 WHERE t.patient_id IS NULL OR t._target_hash <> i._hash
-""").withColumn('surrogate_key', F.monotonically_increasing_id()) \
+""").withColumn('surrogate_key', (F.row_number().over(Window.orderBy(F.monotonically_increasing_id())) + lit(_max_sk)).cast('long')) \
     .withColumn('effective_to', lit(None).cast('timestamp')) \
     .withColumn('is_current', lit(True)) \
     .select('surrogate_key', 'patient_id', 'gender','age', 'effective_from', 'effective_to', 'is_current')
