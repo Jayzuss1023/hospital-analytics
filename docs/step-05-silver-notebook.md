@@ -1,6 +1,6 @@
 # Step 5 — Notebook 2: `02_silver_clean_data` (wash and chop)
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Databricks website → left sidebar → **Workspace** → `02_silver_clean_data`
 
@@ -23,4 +23,4 @@ No code changes were needed here.
 
 ---
 
-[← Step 4 — Bronze notebook](step-04-bronze-notebook.md) · [Guide](../configuration.md) · [Step 6 — Gold notebook →](step-06-gold-notebook.md)
+[← Step 4 — Bronze notebook](step-04-bronze-notebook.md) · [Guide](../README.md) · [Step 6 — Gold notebook →](step-06-gold-notebook.md)

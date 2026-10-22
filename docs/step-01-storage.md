@@ -1,6 +1,6 @@
 # Step 1 — Set up the storage (the hard drive)
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Azure Portal → search **Storage accounts**
 
@@ -11,4 +11,4 @@ That's it. The notebooks will create the sub-folders automatically.
 
 ---
 
-[← Step 0 — Azure accounts](step-00-azure-accounts-and-resources.md) · [Guide](../configuration.md) · [Step 2 — Databricks storage access →](step-02-databricks-storage-access.md)
+[← Step 0 — Azure accounts](step-00-azure-accounts-and-resources.md) · [Guide](../README.md) · [Step 2 — Databricks storage access →](step-02-databricks-storage-access.md)

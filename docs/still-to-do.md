@@ -1,6 +1,6 @@
 # Still to do
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 - Fix the "left before they arrived" negative length of stay (in the silver notebook). See [Step 5](step-05-silver-notebook.md).
 - Get the automatic job trigger working reliably (turn on file events, add alerts). See [Step 7](step-07-databricks-job.md).
@@ -10,4 +10,4 @@
 
 ---
 
-[← Quick start](quick-start.md) · [Guide](../configuration.md) · [Glossary →](glossary.md)
+[← Quick start](quick-start.md) · [Guide](../README.md) · [Glossary →](glossary.md)

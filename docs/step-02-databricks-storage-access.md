@@ -1,6 +1,6 @@
 # Step 2 — Give Databricks permission to use the storage
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Two places — first Azure, then Databricks.
 
@@ -25,4 +25,4 @@ Databricks needs a "key card" to get into the storage. We set this up in **Unity
 
 ---
 
-[← Step 1 — Storage](step-01-storage.md) · [Guide](../configuration.md) · [Step 3 — Event Hub →](step-03-event-hub.md)
+[← Step 1 — Storage](step-01-storage.md) · [Guide](../README.md) · [Step 3 — Event Hub →](step-03-event-hub.md)

@@ -1,6 +1,6 @@
 # Step 0 — Create your Azure accounts and resources (do this first)
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Azure Portal
 
@@ -82,4 +82,4 @@ Azure roles get you in the building. Databricks has its own permissions for what
 
 ---
 
-[← Overview](00-overview.md) · [Guide](../configuration.md) · [Step 1 — Storage →](step-01-storage.md)
+[← Overview](00-overview.md) · [Guide](../README.md) · [Step 1 — Storage →](step-01-storage.md)

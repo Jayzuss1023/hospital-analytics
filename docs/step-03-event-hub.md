@@ -1,6 +1,6 @@
 # Step 3 — Set up the mailbox (Event Hub)
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Mostly Azure Portal, with one setup step on the Databricks website.
 
@@ -12,4 +12,4 @@
 
 ---
 
-[← Step 2 — Databricks storage access](step-02-databricks-storage-access.md) · [Guide](../configuration.md) · [Step 4 — Bronze notebook →](step-04-bronze-notebook.md)
+[← Step 2 — Databricks storage access](step-02-databricks-storage-access.md) · [Guide](../README.md) · [Step 4 — Bronze notebook →](step-04-bronze-notebook.md)

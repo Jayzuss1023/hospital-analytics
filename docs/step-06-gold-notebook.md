@@ -1,6 +1,6 @@
 # Step 6 — Notebook 3: `03_gold_transform` (plate the meal)
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Databricks website → left sidebar → **Workspace** → `03_gold_transform`
 
@@ -36,4 +36,4 @@ We also had to:
 
 ---
 
-[← Step 5 — Silver notebook](step-05-silver-notebook.md) · [Guide](../configuration.md) · [Step 7 — Databricks Job →](step-07-databricks-job.md)
+[← Step 5 — Silver notebook](step-05-silver-notebook.md) · [Guide](../README.md) · [Step 7 — Databricks Job →](step-07-databricks-job.md)

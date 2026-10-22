@@ -1,6 +1,6 @@
 # Step 7 — Make it run automatically (Databricks Job)
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Databricks website → left sidebar → **Jobs & Pipelines**
 
@@ -32,4 +32,4 @@ This is called a **file arrival trigger** — like a motion-sensor light that tu
 
 ---
 
-[← Step 6 — Gold notebook](step-06-gold-notebook.md) · [Guide](../configuration.md) · [Step 8 — Azure Data Factory →](step-08-azure-data-factory.md)
+[← Step 6 — Gold notebook](step-06-gold-notebook.md) · [Guide](../README.md) · [Step 8 — Azure Data Factory →](step-08-azure-data-factory.md)

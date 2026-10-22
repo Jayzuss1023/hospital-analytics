@@ -1,6 +1,6 @@
 # Step 9 (optional) — Query the gold tables with Azure Synapse
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Three places, in this order: Databricks website ([9A](#9a)) → Azure Portal ([9B](#9b)) → Synapse Studio ([9C](#9c) onward).
 
@@ -332,4 +332,4 @@ DROP DATABASE SCOPED CREDENTIAL storage_credential;
 
 ---
 
-[← Step 8 — Azure Data Factory](step-08-azure-data-factory.md) · [Guide](../configuration.md) · [Quick start →](quick-start.md)
+[← Step 8 — Azure Data Factory](step-08-azure-data-factory.md) · [Guide](../README.md) · [Quick start →](quick-start.md)

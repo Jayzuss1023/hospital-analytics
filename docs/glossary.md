@@ -1,6 +1,6 @@
 # Glossary
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 | Term                                | Plain-English meaning                                                                                   |
 | ----------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -46,4 +46,4 @@
 
 ---
 
-[← Still to do](still-to-do.md) · [Guide](../configuration.md)
+[← Still to do](still-to-do.md) · [Guide](../README.md)

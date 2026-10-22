@@ -1,6 +1,6 @@
 # Step 8 (optional) — Use Azure Data Factory instead
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Three places, in this order: Databricks website ([8a](#8a)) → Azure Portal ([8b](#8b)) → ADF Studio ([8c](#8c) and [8d](#8d)).
 
@@ -136,4 +136,4 @@ An **action group** is a contact list for alerts. Make one once, reuse it for ev
 
 ---
 
-[← Step 7 — Databricks Job](step-07-databricks-job.md) · [Guide](../configuration.md) · [Step 9 — Synapse →](step-09-synapse.md)
+[← Step 7 — Databricks Job](step-07-databricks-job.md) · [Guide](../README.md) · [Step 9 — Synapse →](step-09-synapse.md)

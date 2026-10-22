@@ -1,6 +1,6 @@
 # Step 4 — Notebook 1: `01_bronze_raw_data` (grab the groceries)
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Databricks website → left sidebar → **Workspace** → `01_bronze_raw_data`
 
@@ -27,4 +27,4 @@ What it does, step by step:
 
 ---
 
-[← Step 3 — Event Hub](step-03-event-hub.md) · [Guide](../configuration.md) · [Step 5 — Silver notebook →](step-05-silver-notebook.md)
+[← Step 3 — Event Hub](step-03-event-hub.md) · [Guide](../README.md) · [Step 5 — Silver notebook →](step-05-silver-notebook.md)

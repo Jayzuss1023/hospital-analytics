@@ -1,8 +1,8 @@
 # The big picture and the tools
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
-This is the plain-English version of the main [README.md](../README.md). No prior experience with Azure or Databricks is needed. If a word is unfamiliar, check the [Glossary](glossary.md).
+No prior experience with Azure or Databricks is needed. If a word is unfamiliar, check the [Glossary](glossary.md).
 
 ---
 
@@ -46,4 +46,4 @@ This three-step pattern is called the **medallion architecture** (bronze, silver
 
 ---
 
-[Guide](../configuration.md) · [Step 0 — Azure accounts and resources →](step-00-azure-accounts-and-resources.md)
+[Guide](../README.md) · [Step 0 — Azure accounts and resources →](step-00-azure-accounts-and-resources.md)

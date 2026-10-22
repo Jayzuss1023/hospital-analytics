@@ -1,6 +1,6 @@
 # Quick start: running it by hand
 
-[← Guide](../configuration.md)
+[← Guide](../README.md)
 
 **Where:** Databricks website → left sidebar → **Workspace**
 
@@ -12,4 +12,4 @@ If you just want to see it work, open each notebook and run the first cell, in t
 
 ---
 
-[← Step 9 — Synapse](step-09-synapse.md) · [Guide](../configuration.md) · [Still to do →](still-to-do.md)
+[← Step 9 — Synapse](step-09-synapse.md) · [Guide](../README.md) · [Still to do →](still-to-do.md)
